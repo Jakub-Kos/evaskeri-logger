@@ -1,6 +1,6 @@
 # e-vaskeri usage logger (GitHub Actions)
 
-Logs the laundry board at **Signalhuset** every 15 minutes using GitHub's free
+Logs the laundry board at **Signalhuset** every 10 minutes using GitHub's free
 scheduled Actions, and commits each reading into `evaskeri_log.csv` in this
 repo. No server to run — the repo itself is the database. A second workflow
 turns the log into charts showing when the laundry is busiest and quietest.
@@ -58,7 +58,7 @@ days gives a usable daily shape; a week or two makes the weekday pattern solid.
 
 ## Notes & tuning
 
-- **Interval:** set in `record.yml` (`cron: '*/15 * * * *'`, UTC but
+- **Interval:** set in `record.yml` (`cron: '*/10 * * * *'`, UTC but
   interval-based so timezone doesn't matter). Minimum GitHub allows is 5 minutes.
 - **Scheduling isn't exact:** GitHub may delay or occasionally skip scheduled
   runs under load. Fine for usage statistics.

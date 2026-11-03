@@ -4,14 +4,14 @@ name: Record laundry usage
 # The commit history IS the dataset, and committing keeps the repo "active" so
 # the scheduled workflow is never auto-disabled for inactivity.
 #
-# Interval note: this default (every 15 min) assumes a PUBLIC repo, where Actions
+# Interval note: this default (every 10 min) assumes a PUBLIC repo, where Actions
 # minutes are unlimited. On a PRIVATE repo you get a monthly free-minute cap and
 # each run bills a whole minute, so change the cron to '*/30 * * * *' there.
 # Cron is in UTC, but an every-N-minutes schedule is timezone-independent.
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch:        # lets you trigger a sample manually from the Actions tab
 
 permissions:
