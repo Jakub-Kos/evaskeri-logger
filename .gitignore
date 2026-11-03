@@ -1,0 +1,6 @@
+# charts generated locally / by the plot workflow
+usage_by_hour.png
+usage_by_weekday.png
+usage_heatmap.png
+__pycache__/
+*.pyc

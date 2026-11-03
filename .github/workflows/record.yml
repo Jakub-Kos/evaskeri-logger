@@ -1,0 +1,47 @@
+name: Record laundry usage
+
+# Samples the laundry board on a schedule and commits each row back to the repo.
+# The commit history IS the dataset, and committing keeps the repo "active" so
+# the scheduled workflow is never auto-disabled for inactivity.
+#
+# Interval note: this default (every 15 min) assumes a PUBLIC repo, where Actions
+# minutes are unlimited. On a PRIVATE repo you get a monthly free-minute cap and
+# each run bills a whole minute, so change the cron to '*/30 * * * *' there.
+# Cron is in UTC, but an every-N-minutes schedule is timezone-independent.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:        # lets you trigger a sample manually from the Actions tab
+
+permissions:
+  contents: write           # allow the job to push the new row
+
+concurrency:
+  group: record             # serialize runs so two samples never race on the push
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch one sample
+        env:
+          EVASKERI_USER: ${{ secrets.EVASKERI_USER }}
+          EVASKERI_PASS: ${{ secrets.EVASKERI_PASS }}
+        run: python3 fetch_sample.py     # stdlib only; runner's python3 is enough
+
+      - name: Commit the new row
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add evaskeri_log.csv
+          if git diff --cached --quiet; then
+            echo "nothing new to commit"
+            exit 0
+          fi
+          git commit -m "sample $(date -u +%FT%TZ)"
+          git pull --rebase --autostash
+          git push

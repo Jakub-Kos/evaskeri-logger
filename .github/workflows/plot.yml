@@ -1,0 +1,29 @@
+name: Plot usage
+
+# Run this by hand from the Actions tab (Run workflow). It builds the charts
+# from the collected log and uploads them as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  plot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt
+
+      - run: python plot_usage.py evaskeri_log.csv
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: usage-charts
+          path: |
+            usage_by_hour.png
+            usage_by_weekday.png
+            usage_heatmap.png
