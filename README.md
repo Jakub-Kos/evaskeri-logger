@@ -58,7 +58,7 @@ days gives a usable daily shape; a week or two makes the weekday pattern solid.
 
 ## Notes & tuning
 
-- **Interval:** set in `record.yml` (`cron: '*/10 * * * *'`, UTC but
+- **Interval:** set in `record.yml` (`cron: '3,13,23,33,43,53 * * * *'`, UTC but
   interval-based so timezone doesn't matter). Minimum GitHub allows is 5 minutes.
 - **Scheduling isn't exact:** GitHub may delay or occasionally skip scheduled
   runs under load. Fine for usage statistics.
