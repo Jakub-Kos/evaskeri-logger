@@ -1,6 +1,6 @@
 ![Laundry occupancy by weekday and hour](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/usage_heatmap.png)
 
-*Share of machines in use by weekday and hour (UTC). Rebuilt after every sample, so it sharpens as data accumulates.*
+*Share of machines in use by weekday and hour (Copenhagen time). Rebuilt after every sample, so it sharpens as data accumulates.*
 
 # e-vaskeri usage logger (GitHub Actions)
 
@@ -72,9 +72,8 @@ days gives a usable daily shape; a week or two makes the weekday pattern solid.
   Public repos have no such limit.
 - **Won't get auto-disabled:** GitHub disables workflows after 60 days
   of repo inactivity, but every sample is a commit, so this repo stays active.
-- **Timestamps** in the log are UTC; `plot_usage.py` derives hour/weekday from
-  them. If you want the charts in local (Copenhagen) time, shift there — ask and
-  it's a one-line change.
+- **Timestamps** in the log are UTC; `plot_usage.py` converts them to Copenhagen
+  time (including summer/winter time) before bucketing by hour and weekday.
 
 ## Reliable 10-minute sampling (external trigger)
 

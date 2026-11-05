@@ -26,7 +26,9 @@ WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 def load(path):
     df = pd.read_csv(path)
-    df["ts"] = pd.to_datetime(df["timestamp_iso"])
+    # the log is UTC; bucket by Copenhagen wall-clock time (handles DST)
+    df["ts"] = (pd.to_datetime(df["timestamp_iso"]).dt.tz_localize("UTC")
+                .dt.tz_convert("Europe/Copenhagen"))
     df["hour"] = df["ts"].dt.hour
     df["weekday"] = pd.Categorical(df["ts"].dt.day_name().str[:3],
                                    categories=WEEK, ordered=True)
@@ -96,7 +98,7 @@ def plot_heatmap(df):
     ax.set_xticklabels(range(0, 24, 2))
     ax.set_yticks(range(len(WEEK)))
     ax.set_yticklabels(WEEK)
-    ax.set_xlabel("hour of day (UTC)")
+    ax.set_xlabel("hour of day (Copenhagen time)")
     ax.set_title("Occupancy heatmap (% machines in use)")
     fig.colorbar(im, ax=ax, label="% in use")
     fig.tight_layout()
