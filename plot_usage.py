@@ -96,7 +96,7 @@ def plot_heatmap(df):
     ax.set_xticklabels(range(0, 24, 2))
     ax.set_yticks(range(len(WEEK)))
     ax.set_yticklabels(WEEK)
-    ax.set_xlabel("hour of day")
+    ax.set_xlabel("hour of day (UTC)")
     ax.set_title("Occupancy heatmap (% machines in use)")
     fig.colorbar(im, ax=ax, label="% in use")
     fig.tight_layout()

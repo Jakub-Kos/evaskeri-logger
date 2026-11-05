@@ -1,3 +1,7 @@
+![Laundry occupancy by weekday and hour](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/usage_heatmap.png)
+
+*Share of machines in use by weekday and hour (UTC). Rebuilt after every sample, so it sharpens as data accumulates.*
+
 # e-vaskeri usage logger (GitHub Actions)
 
 Logs the laundry board at **Signalhuset** every 10 minutes (triggered by an external
