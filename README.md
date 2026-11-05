@@ -1,7 +1,7 @@
 # e-vaskeri usage logger (GitHub Actions)
 
-Logs the laundry board at **Signalhuset** every 10 minutes using GitHub's free
-scheduled Actions, and commits each reading into `evaskeri_log.csv` in this
+Logs the laundry board at **Signalhuset** every 10 minutes (triggered by an external
+cron job calling GitHub Actions), and commits each reading into `evaskeri_log.csv` in this
 repo. No server to run — the repo itself is the database. A second workflow
 turns the log into charts showing when the laundry is busiest and quietest.
 
@@ -10,7 +10,7 @@ turns the log into charts showing when the laundry is busiest and quietest.
 | File | What it does |
 |------|--------------|
 | `fetch_sample.py` | Logs in, reads the board once, appends one row per machine. Standard library only. |
-| `.github/workflows/record.yml` | Scheduled job: runs `fetch_sample.py` and commits the new row. |
+| `.github/workflows/record.yml` | Job started by the external cron job: runs `fetch_sample.py` and commits the new row. |
 | `.github/workflows/plot.yml` | Manual job: builds charts and uploads them as an artifact. |
 | `plot_usage.py` | Reads the CSV → `usage_by_hour.png`, `usage_by_weekday.png`, `usage_heatmap.png`. |
 | `requirements.txt` | `pandas`, `matplotlib` (only needed for plotting). |
@@ -33,7 +33,7 @@ turns the log into charts showing when the laundry is busiest and quietest.
    permissions → Read and write permissions → Save.**
 
 4. **Enable Actions.** Open the **Actions** tab and enable workflows if prompted.
-   Scheduled workflows only run from the default branch, so make sure these files
+   Workflows only run from the default branch, so make sure these files
    are on `main`.
 
 That's it. Within ~15 minutes the first row lands in `evaskeri_log.csv`, and it
@@ -58,15 +58,15 @@ days gives a usable daily shape; a week or two makes the weekday pattern solid.
 
 ## Notes & tuning
 
-- **Interval:** set in `record.yml` (`cron: '3,13,23,33,43,53 * * * *'`, UTC but
-  interval-based so timezone doesn't matter). Minimum GitHub allows is 5 minutes.
-- **Scheduling isn't exact:** GitHub may delay or occasionally skip scheduled
-  runs under load. Fine for usage statistics.
+- **Interval:** set by the external cron job (see below), not by `record.yml`. UTC but
+  interval-based so timezone does not matter.
+- **Timing isn't exact:** runs may be delayed or occasionally missed if GitHub is busy
+  or the cron service is down. Fine for usage statistics.
 - **Private repos:** you get a monthly free-minutes cap and **each run is billed
   as a whole minute**. At 15-min spacing that's ~2,880 min/month, over the free
-  tier — so on a private repo change the cron to **`*/30 * * * *`** (~1,440/month).
+  tier — so on a private repo change the cron job to **every 30 minutes** (~1,440/month).
   Public repos have no such limit.
-- **Won't get auto-disabled:** GitHub disables scheduled workflows after 60 days
+- **Won't get auto-disabled:** GitHub disables workflows after 60 days
   of repo inactivity, but every sample is a commit, so this repo stays active.
 - **Timestamps** in the log are UTC; `plot_usage.py` derives hour/weekday from
   them. If you want the charts in local (Copenhagen) time, shift there — ask and
@@ -74,10 +74,10 @@ days gives a usable daily shape; a week or two makes the weekday pattern solid.
 
 ## Reliable 10-minute sampling (external trigger)
 
-GitHub's own `schedule` trigger is best-effort and on this repo fires only every
-few hours. To get real 10-minute spacing, have a free external timer (e.g.
-[cron-job.org](https://cron-job.org)) start the workflow through the API. The
-built-in schedule can stay as a backup; runs are serialized by `concurrency`.
+GitHub's own `schedule` trigger was best-effort and on this repo fired only every
+few hours, so it was removed. To get real 10-minute spacing, a free external timer (e.g.
+[cron-job.org](https://cron-job.org)) starts the workflow through the API. The
+workflow has no schedule of its own; runs are serialized by `concurrency`.
 
 1. **Create a token:** GitHub → Settings → Developer settings → Personal access
    tokens → Fine-grained tokens → Generate new token. Repository access: *Only
