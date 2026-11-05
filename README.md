@@ -71,3 +71,27 @@ days gives a usable daily shape; a week or two makes the weekday pattern solid.
 - **Timestamps** in the log are UTC; `plot_usage.py` derives hour/weekday from
   them. If you want the charts in local (Copenhagen) time, shift there — ask and
   it's a one-line change.
+
+## Reliable 10-minute sampling (external trigger)
+
+GitHub's own `schedule` trigger is best-effort and on this repo fires only every
+few hours. To get real 10-minute spacing, have a free external timer (e.g.
+[cron-job.org](https://cron-job.org)) start the workflow through the API. The
+built-in schedule can stay as a backup; runs are serialized by `concurrency`.
+
+1. **Create a token:** GitHub → Settings → Developer settings → Personal access
+   tokens → Fine-grained tokens → Generate new token. Repository access: *Only
+   select repositories* → `evaskeri-logger`. Permissions → Repository →
+   **Actions: Read and write**. Set an expiry (up to 1 year) and copy the token.
+2. **Create a cron job** on the timer service, every 10 minutes:
+   - URL: `https://api.github.com/repos/Jakub-Kos/evaskeri-logger/actions/workflows/record.yml/dispatches`
+   - Method: `POST`
+   - Headers:
+     - `Authorization: Bearer <your token>`
+     - `Accept: application/vnd.github+json`
+     - `X-GitHub-Api-Version: 2022-11-28`
+     - `Content-Type: application/json`
+   - Body: `{"ref":"main"}`
+   - A success response is `204 No Content`.
+3. Keep the token only in the timer service. Never commit it. When it expires,
+   generate a new one and update the job.
