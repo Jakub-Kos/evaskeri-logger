@@ -22,6 +22,7 @@ concurrency:
 jobs:
   sample:
     runs-on: ubuntu-latest
+    timeout-minutes: 5          # a normal run takes ~15 s; don't let a hang pile up
     steps:
       - uses: actions/checkout@v4
 
@@ -41,8 +42,15 @@ jobs:
             exit 0
           fi
           git commit -m "sample $(date -u +%FT%TZ)"
-          git pull --rebase --autostash
-          git push
+          # GitHub occasionally errors on push; retry before failing the run
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then
+              exit 0
+            fi
+            echo "push attempt $i failed, retrying"
+            sleep $((i * 5))
+          done
+          exit 1
 
   # Rebuild the weekly heatmap shown at the top of the README. It is force-pushed
   # to a history-less `charts` branch, so the 10-minute updates don't bloat main.

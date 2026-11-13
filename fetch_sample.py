@@ -101,13 +101,21 @@ def main():
     if not user or not pw:
         sys.exit("Missing EVASKERI_USER / EVASKERI_PASS environment variables.")
 
-    try:
-        session = login(user, pw)
-        data = fetch_live(session)
-    except urllib.error.HTTPError as e:
-        sys.exit(f"HTTP error {e.code} talking to backend.")
-    except urllib.error.URLError as e:
-        sys.exit(f"Network error: {e.reason}")
+    # The backend occasionally times out; retry transient failures so a blip
+    # doesn't fail the run (and trigger a notification email).
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            session = login(user, pw)
+            data = fetch_live(session)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == attempts:
+                sys.exit(f"HTTP error {e.code} talking to backend.")
+        except OSError as e:    # URLError, TimeoutError, connection resets
+            if attempt == attempts:
+                sys.exit(f"Network error: {getattr(e, 'reason', e)}")
+        time.sleep(5 * attempt)
 
     if data.get("Return") != 100 or not data.get("Sections"):
         sys.exit(f"Unexpected Live5 response (Return={data.get('Return')}).")
