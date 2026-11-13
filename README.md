@@ -1,6 +1,12 @@
-![Laundry occupancy by weekday and hour](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/usage_heatmap.png)
+![When are the machines busy? Washers and dryers by weekday and half-hour](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/usage_heatmap.png)
 
-*Share of machines in use by weekday and hour (Copenhagen time). Rebuilt after every sample, so it sharpens as data accumulates.*
+*Share of machines in use by weekday and time of day, washers and dryers separately (Copenhagen time). Everything below is rebuilt after every sample, so it sharpens as data accumulates.*
+
+![Best time to do laundry: chance that a machine is free, by hour](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/best_time.png)
+
+![Which machines get used, and how often finished laundry is left inside](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/machine_status.png)
+
+![Busiest days: average load per day](https://raw.githubusercontent.com/Jakub-Kos/evaskeri-logger/charts/daily_load.png)
 
 # e-vaskeri usage logger (GitHub Actions)
 
@@ -16,7 +22,7 @@ turns the log into charts showing when the laundry is busiest and quietest.
 | `fetch_sample.py` | Logs in, reads the board once, appends one row per machine. Standard library only. |
 | `.github/workflows/record.yml` | Job started by the external cron job: runs `fetch_sample.py` and commits the new row. |
 | `.github/workflows/plot.yml` | Manual job: builds charts and uploads them as an artifact. |
-| `plot_usage.py` | Reads the CSV → `usage_by_hour.png`, `usage_by_weekday.png`, `usage_heatmap.png`. |
+| `plot_usage.py` | Reads the CSV → `usage_heatmap.png`, `best_time.png`, `machine_status.png`, `daily_load.png` (plus `usage_by_hour.png`, `usage_by_weekday.png`). |
 | `requirements.txt` | `pandas`, `matplotlib` (only needed for plotting). |
 
 ## One-time setup (about 3 minutes)
@@ -47,7 +53,7 @@ usage* to grab a sample immediately and confirm it works.
 ## Getting your charts
 
 **Easiest:** Actions tab → **Plot usage** → **Run workflow**. When it finishes,
-open the run and download the **usage-charts** artifact (the three PNGs).
+open the run and download the **usage-charts** artifact (the PNGs).
 
 **Or locally**, once you've collected some data:
 
