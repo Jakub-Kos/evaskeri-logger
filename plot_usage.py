@@ -6,11 +6,10 @@ Plot e-vaskeri usage from the log produced by fetch_sample.py.
     python3 plot_usage.py                 # uses evaskeri_log.csv
     python3 plot_usage.py mylog.csv
 
-Produces PNGs and prints a text summary (best / worst times to do laundry):
+Produces PNGs and prints a text summary (best / worst times to start a wash):
     usage_heatmap.png      washers and dryers: weekday x half-hour occupancy
-    best_time.png          chance that a washer / dryer is free, by hour of day
-    machine_status.png     how each machine's time splits: in use / done / free
-    daily_load.png         average load per day (07:00-22:00)
+    best_time.png          chance of a smooth wash -> dry, by start time
+    now.png                live board: every machine, minutes left, outlook
     usage_by_hour.png      average share of machines in use, per hour of day
     usage_by_weekday.png   same, per weekday
 
@@ -18,16 +17,21 @@ Times are shown in Copenhagen time (the log itself is UTC).
 "Occupancy" = fraction of (non-offline) machines in use. Offline machines are
 excluded so a broken machine doesn't look like heavy usage. "Free" means the
 machine's status is Available; a machine marked Done still has laundry in it.
+
+A "smooth wash -> dry" is: a washer is free when you arrive AND a dryer is free
+WASH_MIN minutes later, when the wash finishes.
 """
 
 import sys
 import matplotlib
 matplotlib.use("Agg")          # save to files, no display needed
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Rectangle
+
+WASH_MIN = 45                   # minutes a wash takes before the dryer
+WAKING = (7, 21)                # start hours worth recommending
 
 WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 TZ = "Europe/Copenhagen"
@@ -39,16 +43,10 @@ INK = "#0b0b0b"
 INK2 = "#52514e"
 GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
-WASHER = "#2a78d6"      # categorical slot 1 - washers, in every chart
-DRYER = "#1baf7a"       # categorical slot 3 - dryers, in every chart
-ACCENT = "#eb6834"      # emphasis: finished laundry left in a machine
-IN_USE = INK2
-FREE = "#dedcd5"
-SEQ = LinearSegmentedColormap.from_list(
-    "seq_blue", ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"])
-SEQ.set_bad("#efeeea")  # cells with no data yet
-KIND_COLOR = {"washer": WASHER, "dryer": DRYER}
-KIND_LABEL = {"washer": "Washers", "dryer": "Dryers"}
+CARD = "#f4f3ee"
+WEEKDAY = "#2a78d6"     # categorical slot 1
+WEEKEND = "#eb6834"     # categorical slot 2
+GOOD, SERIOUS, MUTED = "#0ca30c", "#ec835a", "#898781"   # status palette
 
 plt.rcParams.update({
     "font.family": "sans-serif",
@@ -80,10 +78,9 @@ def span_text(df):
             f"{a:%b} {a.day} - {b:%b} {b.day} · Copenhagen time")
 
 
-def titled(fig, title, df, note=None):
+def titled(fig, title, sub):
     fig.text(0.015, 0.975, title, ha="left", va="top", fontsize=15,
              fontweight="semibold", color=INK)
-    sub = span_text(df) + (f" · {note}" if note else "")
     fig.text(0.015, 0.918, sub, ha="left", va="top", fontsize=9.5, color=INK2)
 
 
@@ -104,48 +101,73 @@ def save(fig, name):
     print(f"wrote {name}")
 
 
-def free_chance(df):
-    """Per (day type, kind, hour): share of samples with >= 1 free machine."""
-    per_ts = (df.assign(free=df["status"].str.lower().eq("available"))
-                .groupby(["ts", "kind"])["free"].any().reset_index())
-    per_ts["hour"] = per_ts["ts"].dt.hour
-    per_ts["daytype"] = np.where(per_ts["ts"].dt.day_of_week >= 5,
-                                 "Weekend", "Weekdays")
-    raw = (per_ts.groupby(["daytype", "kind", "hour"])["free"].mean()
-                 .mul(100))
-    # smooth over 3 hours (wrapping past midnight): single hours are noisy
-    def smooth(s):
-        s = s.droplevel([0, 1]).reindex(range(24))
-        wrapped = pd.concat([s.iloc[-1:], s, s.iloc[:1]])
-        return wrapped.rolling(3, center=True, min_periods=2).mean().iloc[1:-1]
-    return raw.groupby(level=[0, 1]).apply(smooth)
+def slot_of(ts):
+    """Half-hour slot of the day, 0..47."""
+    return ts.dt.hour * 2 + (ts.dt.minute >= 30)
 
 
-def waking(s, lo=7, hi=22):
-    """Restrict an hour-indexed series to hours people actually do laundry."""
-    return s[(s.index >= lo) & (s.index <= hi)]
+def hhmm(slot):
+    return f"{int(slot) // 2:02d}:{30 * (int(slot) % 2):02d}"
+
+
+# ------------------------------------------------------ wash -> dry planning
+
+def wash_dry(df):
+    """One row per sample time t: ok = washer free at t AND dryer free later."""
+    free = df.assign(free=df["status"].str.lower().eq("available"))
+    per = (free.groupby(["ts", "kind"])["free"].any().unstack("kind")
+               .dropna().astype(bool).sort_index())
+    left = pd.DataFrame({"ts": per.index, "washer": per["washer"].values})
+    left["target"] = left["ts"] + pd.Timedelta(minutes=WASH_MIN)
+    right = pd.DataFrame({"t_later": per.index,
+                          "dryer_later": per["dryer"].values})
+    m = pd.merge_asof(left, right, left_on="target", right_on="t_later",
+                      direction="nearest", tolerance=pd.Timedelta(minutes=6))
+    m = m.dropna(subset=["t_later"])        # no sample near t + WASH_MIN
+    m["ok"] = m["washer"] & m["dryer_later"].astype(bool)
+    m["slot"] = slot_of(m["ts"])
+    m["daytype"] = np.where(m["ts"].dt.day_of_week >= 5, "Weekend", "Weekdays")
+    return m
+
+
+def plan_curves(df):
+    """{daytype: 48-slot % chance of a smooth wash -> dry}, smoothed 2.5 h."""
+    m = wash_dry(df)
+    raw = m.groupby(["daytype", "slot"])["ok"].mean().mul(100)
+    out = {}
+    for dt in ("Weekdays", "Weekend"):
+        if dt in raw.index.get_level_values(0):
+            s = raw.loc[dt].reindex(range(48))
+        else:
+            s = pd.Series(np.nan, index=range(48))
+        wrapped = pd.concat([s.iloc[-2:], s, s.iloc[:2]])   # wrap midnight
+        out[dt] = (wrapped.rolling(5, center=True, min_periods=3).mean()
+                          .iloc[2:-2].reset_index(drop=True))
+    days = m.groupby("daytype")["ts"].apply(lambda s: s.dt.date.nunique())
+    return out, days.to_dict()
+
+
+def waking_slots(s):
+    lo, hi = WAKING
+    return s.iloc[lo * 2: hi * 2 + 1].dropna()
 
 
 # -------------------------------------------------------------------- summary
 
-def summary(df):
+def summary(df, curves):
     span = df["ts"].max() - df["ts"].min()
     print(f"\nData span: {span}  ({df['ts'].min():%Y-%m-%d %H:%M} "
           f"-> {df['ts'].max():%Y-%m-%d %H:%M}, Copenhagen time)")
     print(f"Samples:   {df['ts'].nunique()} timestamps, "
           f"{len(df)} machine-readings\n")
-    fc = free_chance(df)
-    for daytype in ("Weekdays", "Weekend"):
-        for kind in ("washer", "dryer"):
-            try:
-                s = fc.loc[(daytype, kind)]
-            except KeyError:
-                continue
-            w = waking(s)
-            print(f"{daytype:9s} {kind:7s} best {int(w.idxmax()):02d}:00 "
-                  f"({w.max():.0f}% a machine is free)   "
-                  f"worst {int(w.idxmin()):02d}:00 ({w.min():.0f}%)   "
-                  f"[07:00-22:00, 3 h smoothed]")
+    print(f"Start a wash -> washer free now AND a dryer free {WASH_MIN} min later "
+          f"({WAKING[0]:02d}:00-{WAKING[1]:02d}:00 starts, 2.5 h smoothed):")
+    for dt, s in curves.items():
+        w = waking_slots(s)
+        if w.empty:
+            continue
+        print(f"  {dt:9s} best {hhmm(w.idxmax())} ({w.max():.0f}%)   "
+              f"worst {hhmm(w.idxmin())} ({w.min():.0f}%)")
     print()
 
 
@@ -154,24 +176,27 @@ def summary(df):
 def plot_heatmap(df):
     """Weekday x half-hour occupancy, one panel each for washers and dryers."""
     df = df.copy()
-    df["slot"] = df["ts"].dt.hour * 2 + (df["ts"].dt.minute >= 30)
+    df["slot"] = slot_of(df["ts"])
+    cmap = plt.get_cmap("YlOrRd").copy()
+    cmap.set_bad("#efeeea")                     # cells with no data yet
     fig, axes = plt.subplots(2, 1, figsize=(12, 7.2), sharex=True)
     mesh = None
-    for ax, kind in zip(axes, ("washer", "dryer")):
+    for ax, kind, label in zip(axes, ("washer", "dryer"),
+                               ("Washers", "Dryers")):
         sub = df[df["kind"] == kind]
         piv = (sub.pivot_table(index="weekday", columns="slot",
                                values="in_use", aggfunc="mean", observed=True)
                   .reindex(index=WEEK, columns=range(48)))
         mesh = ax.pcolormesh(np.arange(49), np.arange(8),
                              np.ma.masked_invalid(piv.values * 100),
-                             cmap=SEQ, vmin=0, vmax=100,
-                             edgecolors=SURFACE, linewidth=1.2)
+                             cmap=cmap, vmin=0, vmax=100,
+                             edgecolors=SURFACE, linewidth=1.0)
         ax.set_ylim(7, 0)                       # Monday on top
         ax.set_yticks(np.arange(7) + 0.5)
         ax.set_yticklabels(WEEK)
         ax.set_xticks(range(0, 48, 4))
         ax.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)])
-        ax.set_title(f"{KIND_LABEL[kind]} ({sub['machine'].nunique()} machines)",
+        ax.set_title(f"{label} ({sub['machine'].nunique()} machines)",
                      loc="left", fontsize=10.5, color=INK, pad=6)
         style(ax, grid=None)
         ax.spines["bottom"].set_visible(False)
@@ -179,146 +204,121 @@ def plot_heatmap(df):
     cbar.set_label("% of machines in use", fontsize=9)
     cbar.outline.set_visible(False)
     cbar.ax.tick_params(length=0, labelsize=9)
-    titled(fig, "When are the machines busy?", df,
-           note="grey = no data yet; fills in as samples accumulate")
+    titled(fig, "When are the machines busy?",
+           span_text(df) + " · grey = no data yet")
     fig.subplots_adjust(left=0.06, right=0.925, top=0.86, bottom=0.07,
                         hspace=0.22)
     save(fig, "usage_heatmap.png")
 
 
-def plot_best_time(df):
-    """Chance that at least one washer / dryer is free, by hour of day."""
-    fc = free_chance(df)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), sharey=True)
-    for ax, daytype in zip(axes, ("Weekdays", "Weekend")):
-        for kind in ("dryer", "washer"):
-            try:
-                s = fc.loc[(daytype, kind)].reindex(range(24))
-            except KeyError:
-                continue
-            ax.plot(s.index, s.values, color=KIND_COLOR[kind], linewidth=2.2,
-                    label=KIND_LABEL[kind], solid_capstyle="round")
-            w = waking(s).dropna()
-            if kind != "washer" or w.empty:
-                continue
-            # call out the best and the worst hour to wash (waking hours only)
-            for h, va, dy in ((w.idxmax(), "bottom", 10), (w.idxmin(), "top", -12)):
-                ax.plot(h, s[h], "o", markersize=8, color=WASHER,
-                        markeredgecolor=SURFACE, markeredgewidth=2, zorder=5)
-                ax.annotate(f"{h:02d}:00 · {s[h]:.0f}%", (h, s[h]),
-                            textcoords="offset points", xytext=(0, dy),
-                            ha="center", va=va, fontsize=9, color=INK,
-                            fontweight="semibold", zorder=6,
-                            bbox=dict(boxstyle="round,pad=0.25", fc=SURFACE,
-                                      ec="none", alpha=0.9))
-        ax.set_title(daytype, loc="left", fontsize=10.5, color=INK, pad=8)
-        ax.set_ylim(-8, 112)
-        ax.set_yticks(range(0, 101, 25))
-        ax.set_yticklabels([f"{v}%" for v in range(0, 101, 25)])
-        ax.set_xlim(-0.5, 23.5)
-        ax.set_xticks(range(0, 24, 3))
-        ax.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 3)])
-        style(ax)
-    handles, labels = axes[0].get_legend_handles_labels()
-    handles, labels = handles[::-1], labels[::-1]       # washers first
-    fig.legend(handles, labels, loc="upper right", ncol=2, frameon=False,
-               fontsize=9.5, bbox_to_anchor=(0.985, 0.985))
-    axes[0].set_ylabel("chance at least one is free", fontsize=9)
-    titled(fig, "Best time to do laundry", df,
-           note="dots: best and worst washer hour, 07:00-22:00")
-    fig.subplots_adjust(left=0.07, right=0.985, top=0.80, bottom=0.09,
-                        wspace=0.06)
-    save(fig, "best_time.png")
-
-
-def plot_machine_status(df):
-    """Where each machine's time goes: in use / done and not emptied / free."""
-    st = df["status"].str.lower()
-    d = df.assign(cat=np.select([st.eq("in use"), st.eq("done")],
-                                ["in_use", "done"], default="free"))
-    share = (d.groupby(["machine", "cat"]).size().unstack(fill_value=0)
-              .reindex(columns=["in_use", "done", "free"], fill_value=0))
-    share = share.div(share.sum(axis=1), axis=0) * 100
-    kinds = d.groupby("machine")["kind"].first()
-    order = sorted(share.index, key=lambda m: (kinds[m] != "washer", m))
-    # gap between the washer group and the dryer group
-    ypos, y, prev = {}, 0, None
-    for m in order:
-        if prev is not None and kinds[m] != kinds[prev]:
-            y += 0.7
-        ypos[m] = y
-        y += 1
-        prev = m
-
-    fig, ax = plt.subplots(figsize=(11, 0.5 * len(order) + 2.2))
-    for m in order:
-        left = 0
-        for cat, color in (("in_use", IN_USE), ("done", ACCENT), ("free", FREE)):
-            w = share.loc[m, cat]
-            ax.barh(ypos[m], w, left=left, height=0.62, color=color,
-                    edgecolor=SURFACE, linewidth=1.5)
-            if cat == "in_use" and w >= 6:
-                ax.text(left + w / 2, ypos[m], f"{w:.0f}%", ha="center",
-                        va="center", color="#ffffff", fontsize=9,
-                        fontweight="semibold")
-            left += w
-        done = share.loc[m, "done"]
-        ax.text(103, ypos[m], f"{done:.0f}%", ha="left", va="center",
-                fontsize=9.5, color=INK, fontweight="semibold")
-    ax.text(103, -0.95, "left\nwaiting", ha="left", va="center", fontsize=8.5,
-            color=INK2, linespacing=1.1)
-    ax.set_xlim(0, 100)
-    ax.set_ylim(max(ypos.values()) + 0.6, -1.3)
-    ax.set_yticks([ypos[m] for m in order])
-    ax.set_yticklabels(order)
-    ax.set_xticks(range(0, 101, 25))
-    ax.set_xticklabels([f"{v}%" for v in range(0, 101, 25)])
-    style(ax, grid="x")
-    ax.spines["bottom"].set_visible(False)
-    handles = [plt.Rectangle((0, 0), 1, 1, color=c)
-               for c in (IN_USE, ACCENT, FREE)]
-    fig.legend(handles, ["In use", "Done - laundry left inside", "Free"],
-               loc="upper right", ncol=3, frameon=False, fontsize=9.5,
-               bbox_to_anchor=(0.985, 0.985))
-    titled(fig, "Which machines get used - and left full", df,
-           note="share of time per machine")
-    fig.subplots_adjust(left=0.09, right=0.93, top=0.86, bottom=0.07)
-    save(fig, "machine_status.png")
-
-
-def plot_daily_load(df):
-    """Average share of machines in use per day, 07:00-22:00, washers vs dryers."""
-    d = df[(df["hour"] >= 7) & (df["hour"] < 22)].copy()
-    d["date"] = d["ts"].dt.tz_localize(None).dt.normalize()
-    # a full 15 h day at 10 min spacing is ~90 samples; skip partial days
-    per_day = d.groupby("date")["ts"].nunique()
-    full = per_day[per_day >= 60].index
-    load = (d[d["date"].isin(full)].groupby(["date", "kind"])["in_use"]
-              .mean().mul(100).unstack("kind").tail(28))
-    if load.empty:
-        print("daily_load.png skipped: no complete day yet")
-        return
-    x = np.arange(len(load))
-    fig, ax = plt.subplots(figsize=(12, 4.6))
-    for i, kind in enumerate(("washer", "dryer")):
-        ax.bar(x + (i - 0.5) * 0.4, load[kind], width=0.4,
-               color=KIND_COLOR[kind], edgecolor=SURFACE, linewidth=1.5,
-               label=KIND_LABEL[kind])
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{t:%a}\n{t.day} {t:%b}" for t in load.index],
-                       fontsize=8.5)
-    ax.set_xlim(-0.7, len(load) - 0.3)
-    ax.set_ylim(0, 100)
+def plot_best_time(curves, days, df):
+    """Chance of a smooth wash -> dry by start time, weekdays vs weekend."""
+    fig, ax = plt.subplots(figsize=(12, 5))
+    x = np.arange(48) / 2
+    series = (("Weekdays", WEEKDAY), ("Weekend", WEEKEND))
+    for dt, color in series:
+        s = curves[dt]
+        n = days.get(dt, 0)
+        ax.plot(x, s.values, color=color, linewidth=2.4, solid_capstyle="round",
+                label=f"{dt} ({n} day{'s' if n != 1 else ''} of data)")
+    # call out the single best start (both lines peak early) and each line's worst
+    marks = []
+    wake = {dt: waking_slots(curves[dt]) for dt, _ in series}
+    wake = {dt: w for dt, w in wake.items() if not w.empty}
+    if wake:
+        dt_best = max(wake, key=lambda d: wake[d].max())
+        marks.append((dt_best, wake[dt_best].idxmax(), "bottom", 11))
+    marks += [(dt, w.idxmin(), "top", -12) for dt, w in wake.items()]
+    colors = dict(series)
+    for dt, slot, va, dy in marks:
+        v = wake[dt][slot]
+        ax.plot(slot / 2, v, "o", markersize=8, color=colors[dt],
+                markeredgecolor=SURFACE, markeredgewidth=2, zorder=5)
+        ax.annotate(f"{hhmm(slot)} · {v:.0f}%", (slot / 2, v),
+                    textcoords="offset points", xytext=(0, dy),
+                    ha="center", va=va, fontsize=9, color=INK,
+                    fontweight="semibold", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.25", fc=SURFACE,
+                              ec="none", alpha=0.9))
+    ax.set_xlim(WAKING[0] - 1, WAKING[1] + 2)
+    ax.set_xticks(range(WAKING[0] - 1, WAKING[1] + 3, 2))
+    ax.set_xticklabels([f"{h:02d}:00" for h in range(WAKING[0] - 1,
+                                                      WAKING[1] + 3, 2)])
+    ax.set_ylim(0, 108)
     ax.set_yticks(range(0, 101, 25))
     ax.set_yticklabels([f"{v}%" for v in range(0, 101, 25)])
-    ax.set_ylabel("average % of machines in use", fontsize=9)
+    ax.set_xlabel("when you put the wash on", fontsize=9)
+    ax.set_ylabel("chance it goes smoothly", fontsize=9)
     style(ax)
     fig.legend(*ax.get_legend_handles_labels(), loc="upper right", ncol=2,
                frameon=False, fontsize=9.5, bbox_to_anchor=(0.985, 0.985))
-    titled(fig, "Busiest days", df,
-           note="average load 07:00-22:00; partial days left out")
-    fig.subplots_adjust(left=0.07, right=0.985, top=0.84, bottom=0.14)
-    save(fig, "daily_load.png")
+    titled(fig, "Best time to start a wash",
+           f"A washer is free when you arrive AND a dryer is free "
+           f"{WASH_MIN} min later · {span_text(df)}")
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.84, bottom=0.12)
+    save(fig, "best_time.png")
+
+
+def plot_now(df, curves):
+    """Live board: every machine with status and minutes left, plus outlook."""
+    last = df["ts"].max()
+    cur = df[df["ts"] == last].sort_values("machine")
+    fig, ax = plt.subplots(figsize=(11, 5.3))
+    ax.set_xlim(-2.75, 6.05)
+    ax.set_ylim(-0.55, 2.75)
+    ax.axis("off")
+
+    rows = (("washer", "Washers", 1.95), ("dryer", "Dryers", 0.8))
+    for kind, label, y in rows:
+        sub = cur[cur["kind"] == kind]
+        n_free = int(sub["status"].str.lower().eq("available").sum())
+        busy = sub[sub["in_use"] == 1]["remaining_min"].dropna()
+        if n_free:
+            nxt = "free now"
+        elif not busy.empty:
+            nxt = f"next one in ~{int(busy.min())} min"
+        else:
+            nxt = "none finishing soon"
+        ax.text(-2.65, y + 0.22, label, fontsize=14, fontweight="semibold",
+                va="center", color=INK)
+        ax.text(-2.65, y - 0.06, f"{n_free} of {len(sub)} free", fontsize=11,
+                va="center", color=INK)
+        ax.text(-2.65, y - 0.30, nxt, fontsize=9.5, va="center", color=INK2)
+        for i, (_, r) in enumerate(sub.iterrows()):
+            st = r["status"].lower()
+            if st == "available":
+                color, main, small = GOOD, "Free", "available"
+            elif st == "done":
+                color, main, small = SERIOUS, "Done", "laundry inside"
+            elif pd.notna(r["remaining_min"]):
+                color, main, small = MUTED, f"{int(r['remaining_min'])} min", "left"
+            else:
+                color, main, small = MUTED, "In use", ""
+            x = i + 0.04
+            ax.add_patch(Rectangle((x, y - 0.45), 0.92, 0.9, fc=CARD,
+                                   ec=GRID, linewidth=1))
+            ax.add_patch(Rectangle((x, y - 0.45), 0.92, 0.1, fc=color,
+                                   ec="none"))
+            ax.text(x + 0.46, y + 0.28, r["machine"], ha="center", va="center",
+                    fontsize=9, color=INK2)
+            ax.text(x + 0.46, y + 0.02, main, ha="center", va="center",
+                    fontsize=17, fontweight="semibold", color=INK)
+            ax.text(x + 0.46, y - 0.2, small, ha="center", va="center",
+                    fontsize=8.5, color=INK2)
+
+    # outlook: how likely is a dryer to be free when a wash started now ends
+    dt = "Weekend" if last.day_of_week >= 5 else "Weekdays"
+    v = curves[dt].iloc[int(slot_of(pd.Series([last])).iloc[0])]
+    if pd.notna(v):
+        ax.text(-2.65, -0.3,
+                f"Start a wash now and, typically, a washer is free and a dryer "
+                f"is free {WASH_MIN} min later {v:.0f}% of the time "
+                f"({dt.lower()} at this hour).",
+                fontsize=10, va="center", color=INK)
+    titled(fig, "Right now",
+           f"as of {last:%H:%M} Copenhagen time · refreshed after every sample")
+    fig.subplots_adjust(left=0.015, right=0.985, top=0.86, bottom=0.02)
+    save(fig, "now.png")
 
 
 def plot_by_hour(df):
@@ -359,11 +359,11 @@ def main():
     df = load(path)
     if df.empty:
         sys.exit("No usable rows in the log yet — let the recorder run first.")
-    summary(df)
+    curves, days = plan_curves(df)
+    summary(df, curves)
     plot_heatmap(df)
-    plot_best_time(df)
-    plot_machine_status(df)
-    plot_daily_load(df)
+    plot_best_time(curves, days, df)
+    plot_now(df, curves)
     plot_by_hour(df)
     plot_by_weekday(df)
     print("\nDone.")

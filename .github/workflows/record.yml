@@ -77,7 +77,7 @@ jobs:
       - name: Publish charts to the charts branch
         run: |
           mkdir out
-          cp usage_heatmap.png best_time.png machine_status.png daily_load.png out/
+          cp usage_heatmap.png best_time.png now.png out/
           cd out
           git init -q -b charts
           git config user.name  "github-actions[bot]"
