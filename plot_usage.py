@@ -66,7 +66,13 @@ def load(path):
     df["weekday"] = pd.Categorical(df["ts"].dt.day_name().str[:3],
                                    categories=WEEK, ordered=True)
     df["offline"] = df["status"].str.contains("offline", case=False, na=False)
-    # keep only machines that were online when sampled
+    return df
+
+
+def online(df):
+    """Historical charts: drop offline readings so a dead machine (or a whole
+    facility outage) doesn't read as "always free". The live board does NOT
+    use this - it needs to show offline machines, not make them vanish."""
     return df[~df["offline"]].copy()
 
 
@@ -259,13 +265,19 @@ def plot_best_time(curves, days, df):
     save(fig, "best_time.png")
 
 
-def plot_now(df, curves):
-    """Live board: every machine with status and minutes left, plus outlook."""
-    last = df["ts"].max()
-    cur = df[df["ts"] == last].sort_values("machine")
-    fig, ax = plt.subplots(figsize=(11, 5.3))
+def plot_now(raw, curves):
+    """Live board: every machine with status and minutes left, plus outlook.
+
+    Takes the RAW (unfiltered) log, not the offline-excluded one: a machine -
+    or the whole facility - going offline must still show up as a tile, not
+    silently disappear because its last known state got filtered out.
+    """
+    last = raw["ts"].max()
+    cur = raw[raw["ts"] == last].sort_values("machine")
+    all_offline = bool(cur["offline"].all())
+    fig, ax = plt.subplots(figsize=(11, 5.7))
     ax.set_xlim(-2.75, 6.05)
-    ax.set_ylim(-0.55, 2.75)
+    ax.set_ylim(-0.95, 2.75)
     ax.axis("off")
 
     rows = (("washer", "Washers", 1.95), ("dryer", "Dryers", 0.8))
@@ -273,7 +285,9 @@ def plot_now(df, curves):
         sub = cur[cur["kind"] == kind]
         n_free = int(sub["status"].str.lower().eq("available").sum())
         busy = sub[sub["in_use"] == 1]["remaining_min"].dropna()
-        if n_free:
+        if bool(sub["offline"].all()):
+            nxt = "offline - no live data"
+        elif n_free:
             nxt = "free now"
         elif not busy.empty:
             nxt = f"next one in ~{int(busy.min())} min"
@@ -286,7 +300,9 @@ def plot_now(df, curves):
         ax.text(-2.65, y - 0.30, nxt, fontsize=9.5, va="center", color=INK2)
         for i, (_, r) in enumerate(sub.iterrows()):
             st = r["status"].lower()
-            if st == "available":
+            if r["offline"]:
+                color, main, small = MUTED, "Offline", "no signal"
+            elif st == "available":
                 color, main, small = GOOD, "Free", "available"
             elif st == "done":
                 color, main, small = SERIOUS, "Done", "laundry inside"
@@ -306,17 +322,25 @@ def plot_now(df, curves):
             ax.text(x + 0.46, y - 0.2, small, ha="center", va="center",
                     fontsize=8.5, color=INK2)
 
+    if all_offline:
+        ax.text(-2.65, -0.3,
+                "Every machine shows Offline - the laundry room's connection\n"
+                "or monitoring is likely down, not that all 9 are unused.\n"
+                "The line below is the usual (historical) chance, not live.",
+                fontsize=10, va="center", color=SERIOUS, fontweight="semibold",
+                linespacing=1.5)
     # outlook: how likely is a dryer to be free when a wash started now ends
     dt = "Weekend" if last.day_of_week >= 5 else "Weekdays"
     v = curves[dt].iloc[int(slot_of(pd.Series([last])).iloc[0])]
     if pd.notna(v):
-        ax.text(-2.65, -0.3,
+        ax.text(-2.65, -0.75 if all_offline else -0.3,
                 f"Start a wash now and, typically, a washer is free and a dryer "
                 f"is free {WASH_MIN} min later {v:.0f}% of the time "
                 f"({dt.lower()} at this hour).",
                 fontsize=10, va="center", color=INK)
     titled(fig, "Right now",
-           f"as of {last:%H:%M} Copenhagen time · refreshed after every sample")
+           f"as of {last:%H:%M} Copenhagen time · refreshed after every sample"
+           + (" · OFFLINE" if all_offline else ""))
     fig.subplots_adjust(left=0.015, right=0.985, top=0.86, bottom=0.02)
     save(fig, "now.png")
 
@@ -356,16 +380,19 @@ def plot_by_weekday(df):
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "evaskeri_log.csv"
-    df = load(path)
-    if df.empty:
+    raw = load(path)
+    if raw.empty:
         sys.exit("No usable rows in the log yet — let the recorder run first.")
-    curves, days = plan_curves(df)
-    summary(df, curves)
-    plot_heatmap(df)
-    plot_best_time(curves, days, df)
-    plot_now(df, curves)
-    plot_by_hour(df)
-    plot_by_weekday(df)
+    hist = online(raw)         # offline readings excluded: for the history charts
+    if hist.empty:
+        sys.exit("Every reading so far is Offline — nothing to chart yet.")
+    curves, days = plan_curves(hist)
+    summary(hist, curves)
+    plot_heatmap(hist)
+    plot_best_time(curves, days, hist)
+    plot_now(raw, curves)      # live board: show offline machines, don't hide them
+    plot_by_hour(hist)
+    plot_by_weekday(hist)
     print("\nDone.")
 
 
