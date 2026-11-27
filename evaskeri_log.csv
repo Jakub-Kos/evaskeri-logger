@@ -28636,3 +28636,12 @@ timestamp_iso,epoch,machine,kind,status,in_use,remaining_min
 2026-11-27T16:30:59,1795797059,Dryer 7,dryer,In use,1,
 2026-11-27T16:30:59,1795797059,Dryer 8,dryer,In use,1,16
 2026-11-27T16:30:59,1795797059,Dryer 9,dryer,In use,1,28
+2026-11-27T16:40:41,1795797641,Washer 1,washer,In use,1,11
+2026-11-27T16:40:41,1795797641,Washer 2,washer,In use,1,16
+2026-11-27T16:40:41,1795797641,Washer 3,washer,In use,1,15
+2026-11-27T16:40:41,1795797641,Washer 4,washer,Available,0,
+2026-11-27T16:40:41,1795797641,Washer 5,washer,Available,0,
+2026-11-27T16:40:41,1795797641,Washer 6,washer,Available,0,
+2026-11-27T16:40:41,1795797641,Dryer 7,dryer,Available,0,
+2026-11-27T16:40:41,1795797641,Dryer 8,dryer,In use,1,6
+2026-11-27T16:40:41,1795797641,Dryer 9,dryer,In use,1,18
